@@ -1,0 +1,74 @@
+/* ==========================================================================
+   Admin Panel & Analytics Styling
+   ========================================================================== */
+
+.admin-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.chart-container {
+  position: relative;
+  height: 280px;
+  width: 100%;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.88rem;
+  background: rgba(15, 23, 42, 0.4);
+}
+
+.admin-table th {
+  background: rgba(30, 41, 59, 0.9);
+  padding: 14px 18px;
+  font-weight: 600;
+  color: #cbd5e1;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.admin-table td {
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  color: var(--text-main);
+  vertical-align: middle;
+}
+
+.admin-table tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.verification-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.verified {
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+}
+
+.unverified {
+  background: rgba(245, 158, 11, 0.2);
+  color: #f59e0b;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 8px;
+}
