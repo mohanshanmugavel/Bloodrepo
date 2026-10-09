@@ -138,7 +138,7 @@ function setupOnboardingForm() {
         window.tempGoogleUser = null;
         
         if (typeof window.showToast === 'function') {
-           window.showToast("Registration Complete", "Welcome to TheBloodApp!", "success");
+           window.showToast("Registration Complete", "Welcome to Lifepluse!", "success");
         }
         document.querySelector('[data-target=view-dashboard]')?.click();
       } catch (err) {
@@ -242,8 +242,10 @@ export async function updateUserProfile(updatedFields) {
   const index = users.findIndex(u => u.uid === currentUser.uid);
   if (index !== -1) {
     users[index] = updatedUser;
-    localDb.saveUsers(users);
+  } else {
+    users.push(updatedUser);
   }
+  localDb.saveUsers(users);
   setCurrentUserSession(updatedUser);
   return { success: true, user: updatedUser };
 }

@@ -1,13 +1,8 @@
-/* ==========================================================================
-   Requester Features
-   Create Blood Requests, Match Donors, and Broadcast Notifications
-   ========================================================================== */
-
 import { getCurrentUser } from './auth.js';
 import { localDb, isRealFirebaseConfigured, db } from './firebase-config.js';
-import { findMatchingDonors } from './matching.js';
+import { BLOOD_COMPATIBILITY } from './matching.js';
 import { createNotification, showToast } from './notifications.js';
-import { collection, addDoc } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+import { doc, setDoc, updateDoc, collection, getDocs, query, where } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
 export async function createBloodRequest(formData) {
   const user = getCurrentUser();
@@ -24,73 +19,71 @@ export async function createBloodRequest(formData) {
     city: formData.city,
     address: formData.address || formData.city,
     state: formData.state || '',
-    location: {
-      latitude: parseFloat(formData.latitude) || 9.9185,
-      longitude: parseFloat(formData.longitude) || 78.1402
-    },
     emergencyLevel: formData.emergencyLevel || 'NORMAL',
     requiredDate: formData.requiredDate || new Date().toISOString(),
     contactPhone: formData.contactPhone || user.phone || '',
     contactEmail: formData.contactEmail || user.email || '',
     note: formData.note || '',
     selectedDonorIds: formData.selectedDonorIds || [],
-    status: 'OPEN',
+    status: 'OPEN', // 'OPEN' | 'ACCEPTED' | 'REJECTED' | 'COMPLETED' | 'CANCELLED'
     acceptedDonorId: null,
     acceptedDonorName: null,
     acceptedDonorPhone: null,
     createdAt: new Date().toISOString()
   };
 
-  if (isRealFirebaseConfigured) {
+  if (isRealFirebaseConfigured && db) {
     try {
-      await addDoc(collection(db, "bloodRequests"), newRequest);
+      await setDoc(doc(db, "bloodRequests", newRequest.requestId), newRequest);
     } catch (err) {
-      console.error(err);
+      console.error("Firestore create request error:", err);
     }
   }
 
   const requests = localDb.getRequests();
-  requests.push(newRequest);
+  const existingIdx = requests.findIndex(r => r.requestId === newRequest.requestId);
+  if (existingIdx === -1) {
+    requests.push(newRequest);
+  } else {
+    requests[existingIdx] = newRequest;
+  }
   localDb.saveRequests(requests);
 
-  // ---- Determine donors to notify ----
-  // Gather all donors: localStorage + current user if donor
-  let allLocalDonors = localDb.getUsers().filter(u => u.role === 'donor' && u.isAvailable);
-  
-  // Include current user in donor pool if they are a donor (Firebase user may not be in localStorage)
-  if (user.role === 'donor' && user.isAvailable) {
-    if (!allLocalDonors.find(d => d.uid === user.uid)) {
-      allLocalDonors.push(user);
-      // Also persist to localStorage for future searches
-      const allUsers = localDb.getUsers();
-      if (!allUsers.find(u => u.uid === user.uid)) {
-        allUsers.push(user);
-        localDb.saveUsers(allUsers);
-      }
+  // Retrieve donors across local & Firestore
+  let allDonorsMap = new Map();
+  localDb.getUsers().forEach(u => {
+    if (u && u.uid && u.role === 'donor' && u.isAvailable !== false) {
+      allDonorsMap.set(u.uid, u);
+    }
+  });
+
+  if (isRealFirebaseConfigured && db) {
+    try {
+      const donorSnap = await getDocs(query(collection(db, "users"), where("role", "==", "donor")));
+      donorSnap.forEach(docSnap => {
+        const u = { ...docSnap.data(), uid: docSnap.id };
+        if (u.isAvailable !== false) {
+          allDonorsMap.set(u.uid, u);
+        }
+      });
+    } catch (err) {
+      console.warn("Could not query Firestore donors:", err);
     }
   }
 
-  let donorsToNotify;
-  if (newRequest.selectedDonorIds && newRequest.selectedDonorIds.length > 0) {
-    // User hand-picked specific donors
-    donorsToNotify = allLocalDonors.filter(d => newRequest.selectedDonorIds.includes(d.uid));
-  } else {
-    // Auto-match by blood group + location proximity (top 10)
-    const matchingDonors = findMatchingDonors(
-      newRequest.bloodGroup,
-      newRequest.location,
-      allLocalDonors,
-      { onlyAvailable: true, onlyEligible: false }
-    );
-    donorsToNotify = matchingDonors.slice(0, 10);
-  }
+  const compatibleGroups = BLOOD_COMPATIBILITY[newRequest.bloodGroup] || [newRequest.bloodGroup];
+  const donorsToNotify = Array.from(allDonorsMap.values()).filter(d => {
+    if (d.uid === user.uid) return false;
+    if (newRequest.selectedDonorIds && newRequest.selectedDonorIds.includes(d.uid)) return true;
+    const matchesBlood = compatibleGroups.includes(d.bloodGroup) || d.bloodGroup === newRequest.bloodGroup;
+    return matchesBlood;
+  });
 
-  // Send notifications
   for (const donor of donorsToNotify) {
     await createNotification({
       recipientUid: donor.uid,
-      title: newRequest.emergencyLevel === 'CRITICAL' ? '🚨 URGENT EMERGENCY REQUEST' : '🩸 New Blood Request',
-      message: `${newRequest.hospitalName} in ${newRequest.city} needs ${newRequest.unitsRequired} unit(s) of ${newRequest.bloodGroup}. Patient: ${newRequest.patientName}.`,
+      title: newRequest.emergencyLevel === 'CRITICAL' ? '🚨 URGENT EMERGENCY REQUEST' : '🩸 New Blood Request Received',
+      message: `${newRequest.hospitalName} in ${newRequest.city || 'your area'} needs ${newRequest.unitsRequired} unit(s) of ${newRequest.bloodGroup} blood for ${newRequest.patientName}.`,
       type: newRequest.emergencyLevel === 'CRITICAL' ? 'EMERGENCY_REQUEST' : 'NEW_REQUEST',
       requestId: newRequest.requestId
     });
@@ -108,10 +101,11 @@ export async function acceptBloodRequestByDonor(requestId) {
   if (idx === -1) return { success: false, message: 'Request not found' };
 
   const req = requests[idx];
-  if (req.acceptedDonorId) return { success: false, message: 'This request has already been accepted by another donor' };
+  if (req.acceptedDonorId && req.acceptedDonorId !== user.uid) {
+    return { success: false, message: 'This request has already been accepted by another donor' };
+  }
 
-  // Mark accepted
-  requests[idx] = {
+  const updatedReq = {
     ...req,
     status: 'ACCEPTED',
     acceptedDonorId: user.uid,
@@ -119,35 +113,84 @@ export async function acceptBloodRequestByDonor(requestId) {
     acceptedDonorPhone: user.phone || '',
     acceptedAt: new Date().toISOString()
   };
+
+  requests[idx] = updatedReq;
   localDb.saveRequests(requests);
+
+  if (isRealFirebaseConfigured && db) {
+    try {
+      await updateDoc(doc(db, "bloodRequests", req.requestId), {
+        status: 'ACCEPTED',
+        acceptedDonorId: user.uid,
+        acceptedDonorName: user.name,
+        acceptedDonorPhone: user.phone || '',
+        acceptedAt: new Date().toISOString()
+      });
+    } catch (err) {
+      console.warn("Firestore update error on accept:", err);
+    }
+  }
 
   // Notify requester with donor contact details
   await createNotification({
     recipientUid: req.requesterId,
-    title: '✅ Donor Found!',
-    message: `${user.name} (${user.bloodGroup}, 📞 ${user.phone || 'No phone'}) has accepted your request for ${req.patientName} at ${req.hospitalName}.`,
+    title: '✅ Request Accepted by Donor!',
+    message: `${user.name} (${user.bloodGroup || 'Donor'}, 📞 ${user.phone || 'Contact provided'}) has accepted your request for ${req.patientName} at ${req.hospitalName}.`,
     type: 'ACCEPTED',
     requestId: requestId
   });
 
-  showToast('Request Accepted!', `You accepted the request from ${req.requesterName}. Their contact: ${req.contactPhone}`, 'success');
-  return { success: true };
+  showToast('Request Accepted!', `You accepted the request for ${req.patientName}. Requester phone: ${req.contactPhone || 'Provided'}`, 'success');
+  return { success: true, request: updatedReq };
 }
 
 export async function rejectBloodRequest(requestId) {
   const user = getCurrentUser();
-  if (!user) return { success: false };
+  if (!user) return { success: false, message: "Must be logged in" };
 
-  // Just create a "rejected" notification record (soft reject - request stays OPEN for others)
   const requests = localDb.getRequests();
   const req = requests.find(r => r.requestId === requestId);
-  if (!req) return { success: false };
+  if (!req) return { success: false, message: "Request not found" };
 
-  // Notify requester
+  const isDirectOrAssigned = req.isDirectRequest || req.acceptedDonorId === user.uid;
+  if (isDirectOrAssigned) {
+    req.status = 'REJECTED';
+    req.rejectedByDonorId = user.uid;
+    req.rejectedByDonorName = user.name;
+    req.rejectedAt = new Date().toISOString();
+    req.acceptedDonorId = null;
+    req.acceptedDonorName = null;
+    req.acceptedDonorPhone = null;
+  } else {
+    if (!req.declinedDonorIds) req.declinedDonorIds = [];
+    if (!req.declinedDonorIds.includes(user.uid)) req.declinedDonorIds.push(user.uid);
+  }
+
+  localDb.saveRequests(requests);
+
+  if (isRealFirebaseConfigured && db) {
+    try {
+      if (req.status === 'REJECTED') {
+        await updateDoc(doc(db, "bloodRequests", req.requestId), {
+          status: 'REJECTED',
+          rejectedByDonorId: user.uid,
+          rejectedByDonorName: user.name,
+          rejectedAt: new Date().toISOString(),
+          acceptedDonorId: null,
+          acceptedDonorName: null,
+          acceptedDonorPhone: null
+        });
+      }
+    } catch(err) {
+      console.warn("Firestore reject update error:", err);
+    }
+  }
+
+  // Notify requester that this donor declined
   await createNotification({
     recipientUid: req.requesterId,
-    title: '❌ Donor Unavailable',
-    message: `A donor was unable to fulfil the request for ${req.patientName}. Your request is still open for other donors.`,
+    title: '❌ Request Declined by Donor',
+    message: `${user.name} (${user.bloodGroup || 'Donor'}) was unable to accept your request for ${req.patientName}. Your request status has been updated.`,
     type: 'REJECTED',
     requestId: requestId
   });
@@ -155,10 +198,188 @@ export async function rejectBloodRequest(requestId) {
   return { success: true };
 }
 
+export async function reopenBloodRequestAsBroadcast(requestId) {
+  const user = getCurrentUser();
+  if (!user) return { success: false, message: "Must be logged in" };
+
+  const requests = localDb.getRequests();
+  const idx = requests.findIndex(r => r.requestId === requestId);
+  if (idx === -1) return { success: false, message: "Request not found" };
+
+  const req = requests[idx];
+  req.status = 'OPEN';
+  req.isDirectRequest = false;
+  req.targetDonorId = null;
+  req.targetDonorName = null;
+  req.rejectedByDonorId = null;
+  req.rejectedByDonorName = null;
+  req.acceptedDonorId = null;
+  req.acceptedDonorName = null;
+  req.acceptedDonorPhone = null;
+
+  localDb.saveRequests(requests);
+
+  if (isRealFirebaseConfigured && db) {
+    try {
+      await updateDoc(doc(db, "bloodRequests", req.requestId), {
+        status: 'OPEN',
+        isDirectRequest: false,
+        targetDonorId: null,
+        targetDonorName: null,
+        rejectedByDonorId: null,
+        rejectedByDonorName: null,
+        acceptedDonorId: null,
+        acceptedDonorName: null,
+        acceptedDonorPhone: null
+      });
+    } catch(e) {
+      console.warn("Firestore reopen update error:", e);
+    }
+  }
+
+  // Notify all compatible donors
+  let allDonorsMap = new Map();
+  localDb.getUsers().forEach(u => {
+    if (u && u.uid && u.role === 'donor' && u.isAvailable !== false) {
+      allDonorsMap.set(u.uid, u);
+    }
+  });
+
+  const compatibleGroups = BLOOD_COMPATIBILITY[req.bloodGroup] || [req.bloodGroup];
+  const donorsToNotify = Array.from(allDonorsMap.values()).filter(d => {
+    if (d.uid === user.uid) return false;
+    return compatibleGroups.includes(d.bloodGroup) || d.bloodGroup === req.bloodGroup;
+  });
+
+  for (const donor of donorsToNotify) {
+    await createNotification({
+      recipientUid: donor.uid,
+      title: '🩸 Reopened Blood Request Available',
+      message: `${req.hospitalName} in ${req.city || 'your area'} needs ${req.unitsRequired} unit(s) of ${req.bloodGroup} for ${req.patientName}.`,
+      type: 'NEW_REQUEST',
+      requestId: req.requestId
+    });
+  }
+
+  showToast("Broadcast Reopened", "Your request is now open to all compatible donors.", "success");
+  return { success: true, request: req };
+}
+
+export async function createDirectDonorRequest(targetDonor, formData) {
+  const user = getCurrentUser();
+  if (!user) return { success: false, message: "Must be logged in" };
+
+  const newRequest = {
+    requestId: 'req_direct_' + Date.now(),
+    requesterId: user.uid,
+    requesterName: user.name,
+    patientName: formData.patientName || 'Patient',
+    bloodGroup: targetDonor.bloodGroup || formData.bloodGroup,
+    unitsRequired: parseInt(formData.unitsRequired) || 1,
+    hospitalName: formData.hospitalName,
+    city: formData.city || targetDonor.city || '',
+    address: formData.address || targetDonor.address || '',
+    state: formData.state || targetDonor.state || '',
+    emergencyLevel: formData.emergencyLevel || 'URGENT',
+    requiredDate: formData.requiredDate || new Date().toISOString(),
+    contactPhone: formData.contactPhone || user.phone || '',
+    note: formData.note || `Direct request to ${targetDonor.name}`,
+    targetDonorId: targetDonor.uid,
+    targetDonorName: targetDonor.name,
+    isDirectRequest: true,
+    status: 'OPEN',
+    acceptedDonorId: null,
+    acceptedDonorName: null,
+    acceptedDonorPhone: null,
+    createdAt: new Date().toISOString()
+  };
+
+  if (isRealFirebaseConfigured && db) {
+    try {
+      await setDoc(doc(db, "bloodRequests", newRequest.requestId), newRequest);
+    } catch (err) {
+      console.error("Firestore direct request error:", err);
+    }
+  }
+
+  const requests = localDb.getRequests();
+  const existingIdx = requests.findIndex(r => r.requestId === newRequest.requestId);
+  if (existingIdx === -1) {
+    requests.push(newRequest);
+  } else {
+    requests[existingIdx] = newRequest;
+  }
+  localDb.saveRequests(requests);
+
+  // Send direct notification specifically to this individual donor
+  await createNotification({
+    recipientUid: targetDonor.uid,
+    title: `🩸 Direct Request: ${user.name} asked for your help!`,
+    message: `${user.name} requested ${newRequest.unitsRequired} unit(s) of ${newRequest.bloodGroup} for ${newRequest.patientName} at ${newRequest.hospitalName}. Contact: ${newRequest.contactPhone}`,
+    type: 'DIRECT_REQUEST',
+    requestId: newRequest.requestId
+  });
+
+  return { success: true, request: newRequest };
+}
+
+export async function cancelBloodRequest(requestId) {
+  const user = getCurrentUser();
+  if (!user) return { success: false, message: "Log in required" };
+
+  const requests = localDb.getRequests();
+  const idx = requests.findIndex(r => r.requestId === requestId);
+  if (idx === -1) return { success: false, message: "Request not found" };
+
+  const req = requests[idx];
+  requests[idx].status = 'CANCELLED';
+  localDb.saveRequests(requests);
+
+  if (isRealFirebaseConfigured && db) {
+    try {
+      await updateDoc(doc(db, "bloodRequests", req.requestId), {
+        status: 'CANCELLED'
+      });
+    } catch (err) {
+      console.error("Firestore cancel error:", err);
+    }
+  }
+
+  // If there was an accepted donor assigned, notify them of cancellation
+  if (req.acceptedDonorId) {
+    await createNotification({
+      recipientUid: req.acceptedDonorId,
+      title: 'ℹ️ Blood Request Cancelled',
+      message: `The blood request for ${req.patientName} at ${req.hospitalName} was cancelled by the requester.`,
+      type: 'INFO',
+      requestId: req.requestId
+    });
+  }
+
+  showToast('Request Cancelled', 'Your blood request has been closed.', 'info');
+  return { success: true };
+}
+
 export function getMyRequests() {
   const user = getCurrentUser();
   if (!user) return [];
   const allReqs = localDb.getRequests();
-  return allReqs.filter(r => r.requesterId === user.uid)
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  
+  // Deduplicate by requestId or patientName + createdAt
+  const myMap = new Map();
+  allReqs.forEach(r => {
+    if (r && r.requesterId === user.uid) {
+      const key = r.requestId || `${r.patientName}_${r.createdAt}`;
+      if (!myMap.has(key)) {
+        myMap.set(key, r);
+      } else {
+        const existing = myMap.get(key);
+        if (r.status === 'ACCEPTED' || r.status === 'COMPLETED' || r.status === 'REJECTED' || r.acceptedDonorName) {
+          myMap.set(key, r);
+        }
+      }
+    }
+  });
+
+  return Array.from(myMap.values()).sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
 }

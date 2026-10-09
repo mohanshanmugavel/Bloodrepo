@@ -1,0 +1,17 @@
+{
+  "name": "lifepluse-blood-network",
+  "version": "1.0.0",
+  "description": "Lifepluse - Community Blood Donation & Management Network",
+  "main": "index.html",
+  "scripts": {
+    "dev": "npx -y serve . -l 3000",
+    "start": "npx -y serve . -l 3000"
+  },
+  "keywords": [
+    "blood-donation",
+    "lifepluse",
+    "healthcare"
+  ],
+  "author": "",
+  "license": "ISC"
+}

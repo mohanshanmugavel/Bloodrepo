@@ -71,14 +71,34 @@ class LocalStoreDriver {
   }
 
   init() {
+    // Automatically purge any old cached dummy/seed data
+    try {
+      const existingUsers = JSON.parse(localStorage.getItem('lifepulse_users') || '[]');
+      const cleanUsers = existingUsers.filter(u => u && !u.uid?.startsWith('usr_donor_') && !u.uid?.startsWith('usr_requester_') && !u.uid?.startsWith('usr_admin_') && u.email !== 'arun.donor@lifepluse.org' && u.email !== 'priya.sharma@lifepluse.org');
+      localStorage.setItem('lifepulse_users', JSON.stringify(cleanUsers));
+
+      const existingReqs = JSON.parse(localStorage.getItem('lifepulse_requests') || '[]');
+      const cleanReqs = existingReqs.filter(r => r && !r.requestId?.startsWith('req_seed_'));
+      localStorage.setItem('lifepulse_requests', JSON.stringify(cleanReqs));
+
+      const existingNotifs = JSON.parse(localStorage.getItem('lifepulse_notifs') || '[]');
+      const cleanNotifs = existingNotifs.filter(n => n && !n.notificationId?.startsWith('notif_seed_'));
+      localStorage.setItem('lifepulse_notifs', JSON.stringify(cleanNotifs));
+    } catch(e) {
+      localStorage.setItem('lifepulse_users', '[]');
+      localStorage.setItem('lifepulse_requests', '[]');
+      localStorage.setItem('lifepulse_notifs', '[]');
+      localStorage.setItem('lifepulse_donations', '[]');
+    }
+
     if (!localStorage.getItem('lifepulse_users')) {
-      localStorage.setItem('lifepulse_users', JSON.stringify(SEED_USERS));
+      localStorage.setItem('lifepulse_users', JSON.stringify([]));
     }
     if (!localStorage.getItem('lifepulse_requests')) {
-      localStorage.setItem('lifepulse_requests', JSON.stringify(SEED_REQUESTS));
+      localStorage.setItem('lifepulse_requests', JSON.stringify([]));
     }
     if (!localStorage.getItem('lifepulse_notifs')) {
-      localStorage.setItem('lifepulse_notifs', JSON.stringify(SEED_NOTIFS));
+      localStorage.setItem('lifepulse_notifs', JSON.stringify([]));
     }
     if (!localStorage.getItem('lifepulse_donations')) {
       localStorage.setItem('lifepulse_donations', JSON.stringify([]));

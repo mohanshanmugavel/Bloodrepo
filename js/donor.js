@@ -152,7 +152,7 @@ export async function acceptBloodRequest(requestId) {
   await createNotification({
     recipientUid: request.requesterId,
     title: "✅ Blood Request Accepted!",
-    message: `Donor ${user.name} (${user.bloodGroup}) accepted your request for ${request.hospitalName}. Contact: ${user.phone}`,
+    message: `Donor ${user.name} (${user.bloodGroup || 'Donor'}) accepted your request for ${request.hospitalName || request.patientName}. Contact: ${user.phone || 'Provided'}`,
     type: "ACCEPTED",
     requestId: request.requestId
   });
@@ -210,7 +210,7 @@ export async function markDonationCompleted(requestId) {
 export function generateCertificateHTML(donation) {
   return `
     <div style="padding: 30px; background: #fff; color: #1e293b; border: 10px double #ef4444; border-radius: 12px; text-align: center; font-family: 'Outfit', sans-serif;">
-      <div style="font-size: 2.5rem; color: #ef4444; margin-bottom: 10px;">🩸 LifePulse Certificate of Appreciation</div>
+      <div style="font-size: 2.5rem; color: #ef4444; margin-bottom: 10px;">🩸 Lifepluse Certificate of Appreciation</div>
       <p style="font-size: 1.1rem; color: #64748b;">This certificate is proudly presented to</p>
       <h2 style="font-size: 2.2rem; color: #0f172a; margin: 15px 0; border-bottom: 2px solid #ef4444; display: inline-block; padding-bottom: 6px;">
         ${donation.donorName || 'Blood Donor Hero'}
@@ -226,7 +226,7 @@ export function generateCertificateHTML(donation) {
           <strong>${new Date(donation.completedAt).toLocaleDateString()}</strong>
         </div>
         <div style="text-align: center;">
-          <div style="font-family: cursive; font-size: 1.4rem; color: #ef4444;">LifePulse Network</div>
+          <div style="font-family: cursive; font-size: 1.4rem; color: #ef4444;">Lifepluse Network</div>
           <div style="font-size: 0.8rem; color: #64748b;">Authorized Verification</div>
         </div>
       </div>

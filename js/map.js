@@ -45,8 +45,8 @@ export async function renderMapData() {
 
   const user = getCurrentUser();
   // Always load local data
-  allUsers = localDb.getUsers();
-  activeRequests = localDb.getRequests().filter(r => r.status === 'OPEN');
+  let allUsers = localDb.getUsers();
+  let activeRequests = localDb.getRequests().filter(r => r.status === 'OPEN');
 
   if (isRealFirebaseConfigured) {
     try {
@@ -57,7 +57,7 @@ export async function renderMapData() {
         }
       });
       
-      const reqsSnap = await getDocs(collection(db, "requests"));
+      const reqsSnap = await getDocs(collection(db, "bloodRequests"));
       reqsSnap.forEach(doc => {
         const data = doc.data();
         if (data.status === 'OPEN' && !activeRequests.find(r => r.requestId === data.requestId)) {
@@ -93,7 +93,7 @@ export async function renderMapData() {
         <div class="popup-card">
           <div class="popup-title">🩸 ${u.bloodGroup} Donor</div>
           <div class="popup-sub">${u.name} (Available)</div>
-          ${user && user.role === 'requester' ? `<button class="btn btn-sm btn-primary" onclick="alert('Contacting donor...')">Request Blood</button>` : ''}
+          <button class="btn btn-sm btn-primary" style="margin-top:8px;width:100%;" onclick="window.openDirectRequestModal('${u.uid}')">Request Blood Directly</button>
         </div>
       `);
       markers.push(marker);
